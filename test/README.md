@@ -6,8 +6,6 @@
   - [KinD](#kind)
   - [EKS](#eks)
   - [AKS](#aks)
-  - [OpenShift 4](#openshift-4)
-  - [KinD with OLM](#kind-with-olm)
 - [Debugging with Tilt](#debugging-with-tilt)
   - [Start a debugging session](#start-a-debugging-session)
   - [Errors with read-only file system](#errors-with-read-only-file-system)
@@ -50,14 +48,14 @@ All integration tests require the Kubernetes-Monitor to be built into an image o
 The easiest way to achieve it is by running the `scripts/docker/build-image.sh` script.
 Please note that `docker` needs to be installed in order for this script to succeed.
 
-As part of these tests, we attempt pulling and scanning an image hosted on a private GCR registry. For this test case to work, one has to define the following environment variables: `GCR_IO_SERVICE_ACCOUNT`, `GCR_IO_DOCKERCFG`, `PRIVATE_REGISTRIES_DOCKERCFG`, `DOCKER_HUB_RO_USERNAME`, `DOCKER_HUB_RO_PASSWORD`.
+As part of these tests, we attempt pulling and scanning an image hosted on a private GCR registry. For this test case to work, one has to define the following environment variables: `GCR_IO_SERVICE_ACCOUNT`, `PRIVATE_REGISTRIES_DOCKERCFG`, `DOCKER_HUB_RO_USERNAME`, `DOCKER_HUB_RO_PASSWORD`.
 
 Our integration tests may use different Kubernetes platforms to host the Kubernetes-Monitor. These platforms may use an existing cluster, or create a new one. Both decisions are based on the environment variables:
 * `TEST_PLATFORM` (`kind`, `kindolm`, `eks`)
 * `CREATE_CLUSTER` (`true`, `false`).
 
 Additionally, the deployment of the Kubernetes-Monitor can be configured through an environment variable:
-* `DEPLOYMENT_TYPE` (`YAML`, `Operator`)
+* `DEPLOYMENT_TYPE` (`YAML`)
 
 All integration tests determine the image to be tested based on the environment variable called `KUBERNETES_MONITOR_IMAGE_NAME_AND_TAG`, and fallback to `snyk/kubernetes-monitor:local`, meaning one has to make sure the image desired to be tested is properly named and tagged.
 
@@ -97,22 +95,6 @@ This test uses an existing Azure account with an existing AKS cluster, and as su
 This test runs whenever we commit to our `staging` branch, and at the moment may only run once concurrently since it uses the same cluster.
 
 Run with `npm run test:integration:aks:yaml`.
-
-### OpenShift 4 ###
-
-See the [OpenShift 4 README](README.md) for setup instructions.
-
-OpenShift is RedHat's Kubernetes platform and helps us ensure we support not only the generic Kubernetes API, but also specifically OpenShift 4.
-
-This test runs whenever we commit to our `staging` branch, and at the moment may only run once concurrently since it uses the same cluster.
-
-### KinD with OLM ###
-
-This test helps us ensure our operator is installable and functioning on a plain k8s cluster.
-
-This test runs whenever we commit to any branch.
-
-Run with `npm run test:integration:kindolm:operator`.
 
 ## Debugging with Tilt ##
 

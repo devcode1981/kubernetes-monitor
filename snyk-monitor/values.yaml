@@ -67,15 +67,24 @@ pvc:
 rbac:
   serviceAccount:
     annotations: {}
+    labels: {}
+
+# General-purpose environment variables
+envs:
 
 # Node.js in-container process memory enhancements
-envs:
+nodeEnvVars:
   - name: V8_MAX_OLD_SPACE_SIZE
     value: "2048"
   - name: UV_THREADPOOL_SIZE
     value: "24"
   - name: NODE_OPTIONS
     value: --max_old_space_size=2048
+
+# Variables related to AKS
+azureEnvVars:
+  - name: AZURE_CLIENT_ID
+    value: ""
 
 extraCaCerts: /srv/app/certs/ca.pem
 
@@ -100,7 +109,11 @@ log_level:
 nodeSelector: {}
 
 nodeAffinity:
-  disableBetaArchNodeSelector: false
+  disableBetaArchNodeSelector: true
+  kubernetesIoArch:
+  - amd64
+  kubernetesIoOs:
+  - linux
 
 # Additional labels and annotations for the snyk-monitor Deployment's Pod
 metadata:
@@ -122,8 +135,25 @@ excludedNamespaces:
 #     spec:
 #       securityContext:
 #         fsGroup: <-- here
-securityContext:
-  fsGroup:
+#         ... <-- here
+securityContext: {}
+
+# Allow specifying the whole object in the PodSpec securityContext:
+# spec:
+#   template:
+#     spec:
+#       securityContext:
+#         ... <-- here
+podSecurityContext: {}
+
+snykMonitorSecurityContext:
+  privileged: false
+  runAsNonRoot: true
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
 
 # Set node tolerations for snyk-monitor
 tolerations: []
@@ -139,14 +169,19 @@ skopeo:
     level: 6
 
 workers:
-  count: 10
+  count: 5
+
 sysdig:
   enabled: false
-  namespace: sysdig-agent
   secretName: sysdig-eve-secret
+  # The minumum pollingIntervalMins is 30
+  pollingIntervalMins: 30
 
 strategy:
   type: RollingUpdate
+
+initContainers:
+  enabled: true
 
 # Additional volumes for the deployment, available to all containers
 extraVolumes: []

@@ -103,7 +103,7 @@ export function getUniqueImages(workloadMetadata: IWorkload[]): IScanImage[] {
 
     accum[meta.imageName] = {
       imageWithDigest: digest && `${imageName}@${digest}`,
-      imageName: meta.imageName, // Image name with tag
+      imageName: meta.imageName, // Image name with tag or digest, according to metadata image field declaration
       skopeoRepoType: SkopeoRepositoryType.DockerArchive,
     };
 
@@ -134,10 +134,11 @@ export async function scanImagesAndSendResults(
 
   // All workloads are identical, pick the first one
   const workload = workloadMetadata[0];
-  const workloadState = await getWorkloadAlreadyScanned(workload);
-  const imageState = await getWorkloadImageAlreadyScanned(
+  const workloadState = getWorkloadAlreadyScanned(workload);
+  const imageState = getWorkloadImageAlreadyScanned(
     workload,
     workload.imageName,
+    workload.imageId,
   );
   if (workloadState === undefined && imageState === undefined) {
     logger.info(

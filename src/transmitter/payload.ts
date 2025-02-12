@@ -2,7 +2,7 @@ import { config } from '../common/config';
 import { currentClusterName } from '../supervisor/cluster';
 import { IScanResult } from '../scanner/types';
 import {
-  IDeleteWorkloadPayload,
+  IDeleteWorkloadParams,
   IWorkload,
   ILocalWorkloadLocator,
   IImageLocator,
@@ -118,7 +118,7 @@ export function constructWorkloadMetadata(
 
 export function constructDeleteWorkload(
   localWorkloadLocator: ILocalWorkloadLocator,
-): IDeleteWorkloadPayload {
+): IDeleteWorkloadParams {
   return {
     workloadLocator: {
       ...localWorkloadLocator,
@@ -152,9 +152,11 @@ const workloadKindMap = {
   pod: 'Pod',
   rollout: 'Rollout',
 };
+
 export function constructRuntimeData(
   runtimeResults: IRuntimeImage[],
-): IRuntimeDataPayload {
+  sysdigVersion: number,
+): IRuntimeDataPayload | undefined {
   const filteredRuntimeResults = runtimeResults.reduce((acc, runtimeResult) => {
     if (!isExcludedNamespace(runtimeResult.namespace)) {
       const mappedWorkloadKind =
@@ -177,6 +179,10 @@ export function constructRuntimeData(
     return acc;
   }, [] as IRuntimeImage[]);
 
+  if (filteredRuntimeResults.length === 0) {
+    return;
+  }
+
   const dataFact: IRuntimeDataFact = {
     type: 'loadedPackages',
     data: filteredRuntimeResults,
@@ -185,6 +191,7 @@ export function constructRuntimeData(
   return {
     identity: {
       type: 'sysdig',
+      sysdigVersion: sysdigVersion,
     },
     target: {
       agentId: config.AGENT_ID,

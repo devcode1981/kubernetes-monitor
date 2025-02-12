@@ -11,7 +11,8 @@ import { loadAndSendWorkloadEventsPolicy } from './common/policy';
 import { sendClusterMetadata } from './transmitter';
 import { setSnykMonitorAgentId } from './supervisor/agent';
 import { scrapeData } from './data-scraper';
-import { setupHealthCheck } from './healthcheck';
+import { scrapeDataV1 } from './data-scraper/scraping-v1';
+import { getSysdigVersion, setupHealthCheck, sysdigV1 } from './healthcheck';
 
 process.on('uncaughtException', (error) => {
   if (state.shutdownInProgress) {
@@ -68,15 +69,29 @@ async function monitor(): Promise<void> {
 }
 
 async function setupSysdigIntegration(): Promise<void> {
-  if (!config.SYSDIG_ENDPOINT || !config.SYSDIG_TOKEN) {
-    logger.info({}, 'Sysdig integration not detected');
+  if (
+    !(
+      config.SYSDIG_ENDPOINT_URL &&
+      config.SYSDIG_RISK_SPOTLIGHT_TOKEN &&
+      config.SYSDIG_CLUSTER_NAME
+    ) &&
+    !(config.SYSDIG_ENDPOINT && config.SYSDIG_TOKEN)
+  ) {
+    logger.info({}, 'Sysdig integration not enabled');
     return;
   }
+
+  let sysdigVersion = getSysdigVersion();
+  logger.info({}, `Sysdig ${sysdigVersion} data scraping starting`);
 
   const initialInterval: number = 20 * 60 * 1000; // 20 mins in milliseconds
   setTimeout(async () => {
     try {
-      await scrapeData();
+      if (sysdigVersion == sysdigV1) {
+        await scrapeDataV1();
+      } else {
+        await scrapeData();
+      }
     } catch (error) {
       logger.error(
         { error },
@@ -85,10 +100,14 @@ async function setupSysdigIntegration(): Promise<void> {
     }
   }, initialInterval).unref();
 
-  const interval: number = 4 * 60 * 60 * 1000; // 4 hours in milliseconds
+  const interval: number = config.SYSDIG_POLLING_INTERVAL_MINS * 60 * 1000; // change to milliseconds
   setInterval(async () => {
     try {
-      await scrapeData();
+      if (sysdigVersion == sysdigV1) {
+        await scrapeDataV1();
+      } else {
+        await scrapeData();
+      }
     } catch (error) {
       logger.error({ error }, 'an error occurred while scraping runtime data');
     }

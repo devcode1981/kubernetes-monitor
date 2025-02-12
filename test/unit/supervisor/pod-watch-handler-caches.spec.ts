@@ -1,12 +1,19 @@
-import * as async from 'async';
 import * as fs from 'fs';
 import sleep from 'sleep-promise';
 import * as YAML from 'yaml';
 // NOTE: Very important that the mock is set up before application code is imported!
 let pushCallCount = 0;
-const asyncQueueSpy = jest
-  .spyOn(async, 'queue')
-  .mockReturnValue({ error: () => {}, push: () => pushCallCount++ } as any);
+jest.mock('async', () => ({
+  queue: () => ({
+    error: () => {},
+    pushAsync: async () => pushCallCount++,
+  }),
+}));
+jest.mock('fastq', () => ({
+  promise: () => ({
+    push: async () => pushCallCount++,
+  }),
+}));
 
 import { V1PodSpec, V1Pod } from '@kubernetes/client-node';
 import { IWorkload } from '../../../src/transmitter/types';
@@ -43,8 +50,8 @@ describe('image and workload image cache', () => {
     .mockResolvedValue(workloadMetadata);
 
   afterAll(() => {
-    asyncQueueSpy.mockRestore();
     buildMetadataSpy.mockRestore();
+    jest.restoreAllMocks();
   });
 
   const podFixture = fs.readFileSync(
@@ -56,19 +63,19 @@ describe('image and workload image cache', () => {
   it('pushed data to send', async () => {
     await pod.podWatchHandler(podObject);
     await sleep(500);
-    expect(pushCallCount).toEqual(1);
+    expect(pushCallCount).toEqual(2);
   });
 
   it('cached info, no data pushed to send', async () => {
     await pod.podWatchHandler(podObject);
     await sleep(500);
-    expect(pushCallCount).toEqual(1);
+    expect(pushCallCount).toEqual(2);
   });
 
   it('new image parsed, workload is cached', async () => {
     workloadMetadata[0].imageId = 'newImageName';
     await pod.podWatchHandler(podObject);
     await sleep(1000);
-    expect(pushCallCount).toEqual(2);
+    expect(pushCallCount).toEqual(3);
   });
 });

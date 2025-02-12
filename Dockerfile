@@ -1,15 +1,20 @@
 #---------------------------------------------------------------------
 # STAGE 1: Build credential helpers inside a temporary container
 #---------------------------------------------------------------------
-FROM golang:alpine AS cred-helpers-build
+FROM --platform=linux/amd64 golang:1.23-alpine AS cred-helpers-build
 
-RUN go install github.com/awslabs/amazon-ecr-credential-helper/ecr-login/cli/docker-credential-ecr-login@69c85dc22db6511932bbf119e1a0cc5c90c69a7f
-RUN go install github.com/chrismellard/docker-credential-acr-env@d4055f832e8b16ea2ee93189c5e14faafd36baf6
+RUN apk add git
+RUN go install github.com/awslabs/amazon-ecr-credential-helper/ecr-login/cli/docker-credential-ecr-login@bef5bd9384b752e5c645659165746d5af23a098a
+RUN --mount=type=secret,id=gh_token,required=true \
+    git config --global url."https://$(cat /run/secrets/gh_token):x-oauth-basic@github.com/snyk".insteadOf "https://github.com/snyk" && \
+    go env -w GOPRIVATE=github.com/snyk && \
+    go install github.com/snyk/docker-credential-acr-env@8fa416c5b20b174e9032df1899843b4ebe2adda8 && \
+    git config --global --unset url."https://$(cat /run/secrets/gh_token):x-oauth-basic@github.com/snyk".insteadOf
 
 #---------------------------------------------------------------------
-# STAGE 2: Build the kubernetes-monitor
+# STAGE 2: Build kubernetes-monitor application
 #---------------------------------------------------------------------
-FROM node:gallium-alpine
+FROM --platform=linux/amd64 node:18-alpine3.20
 
 LABEL name="Snyk Controller" \
       maintainer="support@snyk.io" \
@@ -19,18 +24,21 @@ LABEL name="Snyk Controller" \
 
 COPY LICENSE /licenses/LICENSE
 
-ENV NODE_ENV production
+ENV NODE_ENV=production
 
 RUN apk update
 RUN apk upgrade
 RUN apk --no-cache add dumb-init skopeo curl bash python3
+
+RUN npm install -g npm@v10.9.2
 
 RUN addgroup -S -g 10001 snyk
 RUN adduser -S -G snyk -h /srv/app -u 10001 snyk
 
 # Install gcloud
 RUN curl -sL https://sdk.cloud.google.com > /install.sh
-RUN bash /install.sh --disable-prompts --install-dir=/ && rm /google-cloud-sdk/bin/anthoscli
+RUN bash /install.sh --disable-prompts --install-dir=/ && \
+    rm -rf /google-cloud-sdk/platform /google-cloud-sdk/bin/anthoscli /google-cloud-sdk/bin/gcloud-crc32c
 ENV PATH=/google-cloud-sdk/bin:$PATH
 RUN rm /install.sh
 RUN apk del curl bash

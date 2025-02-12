@@ -101,13 +101,46 @@ export async function paginatedClusterArgoRolloutList(): Promise<{
 export async function argoRolloutWatchHandler(
   rollout: V1alpha1Rollout,
 ): Promise<void> {
+  if (rollout.spec?.workloadRef && rollout.metadata?.namespace) {
+    // Attempt to load workloadRef if a template is not directly defined
+    const workloadName = rollout.spec.workloadRef.name;
+    const namespace = rollout.metadata.namespace;
+    switch (rollout.spec.workloadRef.kind) {
+      // Perform lookup for known supported kinds: https://github.com/argoproj/argo-rollouts/blob/master/rollout/templateref.go#L40-L52
+      case 'Deployment': {
+        const deployResult = await retryKubernetesApiRequest(() =>
+          k8sApi.appsClient.readNamespacedDeployment(workloadName, namespace),
+        );
+        rollout.spec.template = deployResult.body.spec?.template;
+        break;
+      }
+      case 'ReplicaSet': {
+        const replicaSetResult = await retryKubernetesApiRequest(() =>
+          k8sApi.appsClient.readNamespacedReplicaSet(workloadName, namespace),
+        );
+        rollout.spec.template = replicaSetResult.body.spec?.template;
+        break;
+      }
+      case 'PodTemplate': {
+        const podTemplateResult = await retryKubernetesApiRequest(() =>
+          k8sApi.coreClient.readNamespacedPodTemplate(workloadName, namespace),
+        );
+        rollout.spec.template = podTemplateResult.body.template;
+        break;
+      }
+      default:
+        logger.debug(
+          { workloadKind: WorkloadKind.ArgoRollout },
+          'Unsupported workloadRef kind specified',
+        );
+    }
+  }
   rollout = trimWorkload(rollout);
 
   if (
     !rollout.metadata ||
-    !rollout.spec ||
-    !rollout.spec.template.metadata ||
-    !rollout.spec.template.spec ||
+    !rollout.spec?.template?.metadata ||
+    !rollout.spec?.template?.spec ||
     !rollout.status
   ) {
     return;
@@ -116,16 +149,14 @@ export async function argoRolloutWatchHandler(
   const workloadAlreadyScanned =
     kubernetesObjectToWorkloadAlreadyScanned(rollout);
   if (workloadAlreadyScanned !== undefined) {
-    await Promise.all([
-      deleteWorkloadAlreadyScanned(workloadAlreadyScanned),
-      deleteWorkloadImagesAlreadyScanned({
-        ...workloadAlreadyScanned,
-        imageIds: rollout.spec.template.spec.containers
-          .filter((container) => container.image !== undefined)
-          .map((container) => container.image!),
-      }),
-      deleteWorkloadFromScanQueue(workloadAlreadyScanned),
-    ]);
+    deleteWorkloadAlreadyScanned(workloadAlreadyScanned);
+    deleteWorkloadImagesAlreadyScanned({
+      ...workloadAlreadyScanned,
+      imageIds: rollout.spec.template.spec.containers
+        .filter((container) => container.image !== undefined)
+        .map((container) => container.image!),
+    });
+    deleteWorkloadFromScanQueue(workloadAlreadyScanned);
   }
 
   const workloadName = rollout.metadata.name || FALSY_WORKLOAD_NAME_MARKER;

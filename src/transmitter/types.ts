@@ -51,7 +51,7 @@ export interface IWorkloadMetadataPayload {
   workloadMetadata: IWorkloadMetadata;
 }
 
-export interface IDeleteWorkloadPayload {
+export interface IDeleteWorkloadParams {
   workloadLocator: IWorkloadLocator;
   agentId: string;
 }
@@ -109,7 +109,7 @@ export interface IRuntimeImagesResponse {
      */
     next?: string;
   };
-  data: IRuntimeImage[];
+  data?: IRuntimeImage[];
 }
 
 export type RuntimeDataType = 'sysdig';
@@ -128,6 +128,7 @@ export interface IRuntimeDataFact {
 export interface IRuntimeDataPayload extends Omit<ScanResult, 'target'> {
   identity: {
     type: RuntimeDataType;
+    sysdigVersion: number;
   };
   target: IRuntimeDataTarget;
   facts: [IRuntimeDataFact];

@@ -39,6 +39,7 @@ function getClusterName(): string {
 config.AGENT_ID = randomUUID();
 
 config.INTEGRATION_ID = config.INTEGRATION_ID.trim();
+config.SERVICE_ACCOUNT_API_TOKEN = config.SERVICE_ACCOUNT_API_TOKEN.trim();
 config.CLUSTER_NAME = getClusterName();
 config.IMAGE_STORAGE_ROOT = '/var/tmp';
 config.POLICIES_STORAGE_ROOT = '/tmp/policies';
@@ -46,7 +47,24 @@ config.EXCLUDED_NAMESPACES = loadExcludedNamespaces();
 config.WORKERS_COUNT = Number(config.WORKERS_COUNT) || 10;
 config.SKOPEO_COMPRESSION_LEVEL = Number(config.SKOPEO_COMPRESSION_LEVEL) || 6;
 
-// return Sysdig endpoint information
+// 30 mins minimum
+if (config.SYSDIG_POLLING_INTERVAL_MINS < 30) {
+  config.SYSDIG_POLLING_INTERVAL_MINS = 30;
+}
+
+// return Sysdig v2 endpoint information
+if (
+  config.SYSDIG_RISK_SPOTLIGHT_TOKEN &&
+  config.SYSDIG_ENDPOINT_URL &&
+  config.SYSDIG_CLUSTER_NAME
+) {
+  config.SYSDIG_RISK_SPOTLIGHT_TOKEN =
+    config.SYSDIG_RISK_SPOTLIGHT_TOKEN.trim();
+  config.SYSDIG_ENDPOINT_URL = config.SYSDIG_ENDPOINT_URL.trim();
+  config.SYSDIG_CLUSTER_NAME = config.SYSDIG_CLUSTER_NAME.trim();
+}
+
+// return Sysdig v1 endpoint information
 if (config.SYSDIG_ENDPOINT && config.SYSDIG_TOKEN) {
   config.SYSDIG_ENDPOINT = config.SYSDIG_ENDPOINT.trim();
   config.SYSDIG_TOKEN = config.SYSDIG_TOKEN.trim();

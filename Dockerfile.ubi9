@@ -1,0 +1,116 @@
+#---------------------------------------------------------------------
+# STAGE 1: Build credential helpers inside a temporary container
+#---------------------------------------------------------------------
+FROM --platform=linux/amd64 registry.access.redhat.com/ubi9/go-toolset:9.5 as cred-helpers-build
+
+RUN GOTOOLCHAIN=go1.23.4 go install github.com/awslabs/amazon-ecr-credential-helper/ecr-login/cli/docker-credential-ecr-login@bef5bd9384b752e5c645659165746d5af23a098a
+RUN --mount=type=secret,id=gh_token,uid=1001,required=true \
+    git config --global url."https://$(cat /run/secrets/gh_token):x-oauth-basic@github.com/snyk".insteadOf "https://github.com/snyk" && \
+    go env -w GOPRIVATE=github.com/snyk && \
+    GOTOOLCHAIN=go1.23.4 go install github.com/snyk/docker-credential-acr-env@8fa416c5b20b174e9032df1899843b4ebe2adda8 && \
+    git config --global --unset url."https://$(cat /run/secrets/gh_token):x-oauth-basic@github.com/snyk".insteadOf
+
+#---------------------------------------------------------------------
+# STAGE 2: Build kubernetes-monitor application
+#---------------------------------------------------------------------
+FROM --platform=linux/amd64 registry.access.redhat.com/ubi9/nodejs-18:1-123 AS build
+
+ENV NODE_ENV production
+
+# Add manifest files and install before adding anything else to take advantage of layer caching
+COPY --chown=1001:1001 package.json package-lock.json ./
+
+RUN npm ci
+
+# add the rest of the app files
+COPY --chown=1001:1001 . ./
+
+# Build typescript
+RUN npm run build
+
+#---------------------------------------------------------------------
+# STAGE 3: Install containers-common to obtain configuration files
+#---------------------------------------------------------------------
+FROM --platform=linux/amd64 registry.access.redhat.com/ubi9/ubi:9.5 AS containers-common
+
+RUN dnf install -y containers-common
+
+#---------------------------------------------------------------------
+# STAGE 4: Build the kubernetes-monitor final image
+#---------------------------------------------------------------------
+FROM --platform=linux/amd64 registry.access.redhat.com/ubi9/ubi:9.5
+
+ARG NODE_18_LATEST_VERSION
+ARG NODE_18_LATEST_VERSION_TAR_GZ_FILE_SHASUM256
+# https://github.com/Yelp/dumb-init/releases
+ARG DUMB_INIT_VERSION=1.2.5
+ARG DUMB_INIT_BINARY_FILE_SHASUM256=e874b55f3279ca41415d290c512a7ba9d08f98041b28ae7c2acb19a545f1c4df
+# https://github.com/lework/skopeo-binary/releases
+ARG SKOPEO_VERSION=1.16.1
+ARG SKOPEO_BINARY_FILE_SHASUM256=8813fb7fcd7a723196ac287683dd929d280f6fe7f0782eace452fe1e3ff2b7eb
+
+LABEL name="Snyk Controller" \
+    maintainer="support@snyk.io" \
+    vendor="Snyk Ltd" \
+    summary="Snyk integration for Kubernetes" \
+    description="Snyk Controller enables you to import and test your running workloads and identify vulnerabilities in their associated images and configurations that might make those workloads less secure."
+
+COPY LICENSE /licenses/LICENSE
+
+ENV NODE_ENV=production
+
+RUN yum upgrade -y
+
+WORKDIR /srv/app
+
+RUN groupadd -g 10001 snyk
+RUN useradd -g snyk -d /srv/app -u 10001 snyk
+
+# Install dumb-init
+RUN curl -sSfLo /usr/bin/dumb-init "https://github.com/Yelp/dumb-init/releases/download/v${DUMB_INIT_VERSION}/dumb-init_${DUMB_INIT_VERSION}_x86_64" && \
+    chmod 755 /usr/bin/dumb-init && \
+    echo "${DUMB_INIT_BINARY_FILE_SHASUM256} /usr/bin/dumb-init" | sha256sum --check --status
+
+# Install skopeo
+RUN curl -sSfLo /usr/bin/skopeo "https://github.com/lework/skopeo-binary/releases/download/v${SKOPEO_VERSION}/skopeo-linux-amd64" && \
+    chmod 755 /usr/bin/skopeo && \
+    echo "${SKOPEO_BINARY_FILE_SHASUM256} /usr/bin/skopeo" | sha256sum --check --status
+# Copy configuration files required for skopeo to copy images, without including entire containers-common install
+COPY --chown=snyk:snyk --from=containers-common /etc/containers/registries.d/default.yaml /etc/containers/registries.d/default.yaml
+COPY --chown=snyk:snyk --from=containers-common /etc/containers/policy.json /etc/containers/policy.json
+
+# Install credential helpers
+COPY --chown=snyk:snyk --from=cred-helpers-build /opt/app-root/src/go/bin/docker-credential-ecr-login /usr/bin/docker-credential-ecr-login
+COPY --chown=snyk:snyk --from=cred-helpers-build /opt/app-root/src/go/bin/docker-credential-acr-env /usr/bin/docker-credential-acr-env
+
+# Install gcloud
+RUN curl -sSfL https://sdk.cloud.google.com | bash -s -- --disable-prompts --install-dir=/ && \
+    rm -rf /google-cloud-sdk/platform /google-cloud-sdk/bin/anthoscli /google-cloud-sdk/bin/gcloud-crc32c
+ENV PATH=/google-cloud-sdk/bin:$PATH
+
+# Install node
+RUN curl -sSfLo /tmp/node_18.tar.gz "https://nodejs.org/dist/latest-v18.x/${NODE_18_LATEST_VERSION}.tar.gz" && \
+    echo "${NODE_18_LATEST_VERSION_TAR_GZ_FILE_SHASUM256} /tmp/node_18.tar.gz" | sha256sum --check --status && \
+    mkdir /tmp/node_18 && tar -C /tmp/node_18 -xzf /tmp/node_18.tar.gz ${NODE_18_LATEST_VERSION}/bin/node && \
+    mv /tmp/node_18/${NODE_18_LATEST_VERSION}/bin/node /usr/local/bin && \
+    rm -rf /tmp/node_18.tar.gz /tmp/node_18
+
+RUN rpm -e --nodeps curl-minimal && \
+    rpm -e --nodeps libcurl-minimal
+
+# The `.config` directory is used by `snyk protect` and we also mount a K8s volume there at runtime.
+# This clashes with OpenShift 3 which mounts things differently and prevents access to the directory.
+# TODO: Remove this line once OpenShift 3 comes out of support.
+RUN mkdir -p .config
+
+# Copy app
+COPY --chown=snyk:snyk --from=build /opt/app-root/src /srv/app/
+
+# OpenShift 4 doesn't allow dumb-init access the app folder without this permission.
+RUN chmod 755 /srv/app && chmod 755 /srv/app/bin && chmod +x /srv/app/bin/start
+
+# This must be in the end for Red Hat Build Service
+RUN chown -R snyk:snyk .
+USER 10001:10001
+
+ENTRYPOINT ["/usr/bin/dumb-init", "--", "bin/start"]

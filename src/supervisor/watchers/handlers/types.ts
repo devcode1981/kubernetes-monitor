@@ -5,7 +5,6 @@ import {
   V1ObjectMeta,
   V1PodTemplateSpec,
   ADD,
-  CHANGE,
   DELETE,
   UPDATE,
 } from '@kubernetes/client-node';
@@ -13,7 +12,12 @@ import { IncomingMessage } from 'http';
 
 export const FALSY_WORKLOAD_NAME_MARKER = 'falsy workload name';
 
-export type KubernetesInformerVerb = ADD | CHANGE | DELETE | UPDATE;
+export type KubernetesInformerVerb = ADD | DELETE | UPDATE;
+
+type WorkloadHandlers = Partial<
+  Record<KubernetesInformerVerb, WorkloadHandlerFunc>
+>;
+
 type WorkloadHandlerFunc = (workload: any) => Promise<void>;
 
 type ListNamespacedWorkloadFunctionFactory = (
@@ -32,9 +36,7 @@ export interface IWorkloadWatchMetadata {
   [workloadKind: string]: {
     clusterEndpoint: string;
     namespacedEndpoint: string;
-    handlers: {
-      [kubernetesInformerVerb in KubernetesInformerVerb]: WorkloadHandlerFunc;
-    };
+    handlers: WorkloadHandlers;
     clusterListFactory: ListClusterWorkloadFunctionFactory;
     namespacedListFactory: ListNamespacedWorkloadFunctionFactory;
   };
@@ -83,11 +85,18 @@ export interface V1alpha1Rollout extends KubernetesObject {
 }
 
 export interface V1alpha1RolloutSpec {
-  template: V1PodTemplateSpec;
+  template?: V1PodTemplateSpec;
+  workloadRef?: V1alpha1RolloutWorkloadRef;
 }
 
 export interface V1alpha1RolloutStatus {
   observedGeneration?: number;
+}
+
+export interface V1alpha1RolloutWorkloadRef {
+  apiVersion: string;
+  kind: string;
+  name: string;
 }
 
 export type V1ClusterList<T> = (
@@ -99,6 +108,7 @@ export type V1ClusterList<T> = (
   pretty?: string,
   resourceVersion?: string,
   resourceVersionMatch?: string,
+  sendInitialEvents?: boolean,
   timeoutSeconds?: number,
   watch?: boolean,
   options?: {
@@ -121,6 +131,7 @@ export type V1NamespacedList<T> = (
   limit?: number,
   resourceVersion?: string,
   resourceVersionMatch?: string,
+  sendInitialEvents?: boolean,
   timeoutSeconds?: number,
   watch?: boolean,
   options?: {

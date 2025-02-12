@@ -2,9 +2,11 @@ import { KubernetesObject, V1Namespace } from '@kubernetes/client-node';
 import LruCache from 'lru-cache';
 
 import { config } from './common/config';
+import { logger } from './common/logger';
+import { IKubeObjectMetadataWithoutPodSpec } from './supervisor/types';
 import { extractNamespaceName } from './supervisor/watchers/internal-namespaces';
 
-const imagesLruCacheOptions: LruCache.Options<string, string> = {
+const imagesLruCacheOptions: LruCache.Options<string, Set<string>> = {
   // limit cache size so we don't exceed memory limit
   max: config.IMAGES_SCANNED_CACHE.MAX_SIZE,
   // limit cache life so if our backend loses track of an image's data,
@@ -22,6 +24,15 @@ const workloadsLruCacheOptions: LruCache.Options<string, string> = {
   updateAgeOnGet: false,
 };
 
+const workloadMetadataLruCacheOptions: LruCache.Options<
+  string,
+  IKubeObjectMetadataWithoutPodSpec
+> = {
+  max: config.WORKLOAD_METADATA_CACHE.MAX_SIZE,
+  maxAge: config.WORKLOAD_METADATA_CACHE.MAX_AGE_MS,
+  updateAgeOnGet: false,
+};
+
 interface WorkloadAlreadyScanned {
   namespace: string;
   type: string;
@@ -35,61 +46,73 @@ interface WorkloadImagesAlreadyScanned {
   imageIds: string[];
 }
 
-function getWorkloadAlreadyScannedKey(
-  workload: WorkloadAlreadyScanned,
-): string {
-  return `${workload.namespace}/${workload.type}/${workload.uid}`;
-}
-
 function getWorkloadImageAlreadyScannedKey(
   workload: WorkloadAlreadyScanned,
-  imageId: string,
+  imageName: string,
 ): string {
-  return `${workload.namespace}/${workload.type}/${workload.uid}/${imageId}`;
+  return `${workload.uid}/${imageName}`;
 }
 
-export async function getWorkloadAlreadyScanned(
+export function getWorkloadAlreadyScanned(
   workload: WorkloadAlreadyScanned,
-): Promise<string | undefined> {
-  const key = getWorkloadAlreadyScannedKey(workload);
+): string | undefined {
+  const key = workload.uid;
   return state.workloadsAlreadyScanned.get(key);
 }
 
-export async function setWorkloadAlreadyScanned(
+export function setWorkloadAlreadyScanned(
   workload: WorkloadAlreadyScanned,
-  value: string,
-): Promise<boolean> {
-  const key = getWorkloadAlreadyScannedKey(workload);
-  return state.workloadsAlreadyScanned.set(key, value);
+  revision: string,
+): boolean {
+  const key = workload.uid;
+  return state.workloadsAlreadyScanned.set(key, revision);
 }
 
-export async function deleteWorkloadAlreadyScanned(
+export function deleteWorkloadAlreadyScanned(
   workload: WorkloadAlreadyScanned,
-): Promise<void> {
-  const key = getWorkloadAlreadyScannedKey(workload);
+): void {
+  const key = workload.uid;
   state.workloadsAlreadyScanned.del(key);
 }
 
-export async function getWorkloadImageAlreadyScanned(
+export function getWorkloadImageAlreadyScanned(
   workload: WorkloadAlreadyScanned,
+  imageName: string,
   imageId: string,
-): Promise<string | undefined> {
-  const key = getWorkloadImageAlreadyScannedKey(workload, imageId);
-  return state.imagesAlreadyScanned.get(key);
+): string | undefined {
+  const key = getWorkloadImageAlreadyScannedKey(workload, imageName);
+  const hasImageId = state.imagesAlreadyScanned.get(key)?.has(imageId);
+  const response = hasImageId ? imageId : undefined;
+  if (response !== undefined) {
+    logger.debug(
+      { 'kubernetes-monitor': { imageId } },
+      'image already exists in cache',
+    );
+  }
+  return response;
 }
 
-export async function setWorkloadImageAlreadyScanned(
+export function setWorkloadImageAlreadyScanned(
   workload: WorkloadAlreadyScanned,
+  imageName: string,
   imageId: string,
-  value: string,
-): Promise<boolean> {
-  const key = getWorkloadImageAlreadyScannedKey(workload, imageId);
-  return state.imagesAlreadyScanned.set(key, value);
+): boolean {
+  const key = getWorkloadImageAlreadyScannedKey(workload, imageName);
+  const images = state.imagesAlreadyScanned.get(key);
+  if (images !== undefined) {
+    images.add(imageId);
+  } else {
+    const set = new Set<string>();
+    set.add(imageId);
+    state.imagesAlreadyScanned.set(key, set);
+  }
+
+  return true;
 }
 
-export async function deleteWorkloadImagesAlreadyScanned(
+export function deleteWorkloadImagesAlreadyScanned(
   workload: WorkloadImagesAlreadyScanned,
-): Promise<void> {
+): void {
   for (const imageId of workload.imageIds) {
     const key = getWorkloadImageAlreadyScannedKey(workload, imageId);
     state.imagesAlreadyScanned.del(key);
@@ -124,11 +147,41 @@ export function deleteNamespace(namespace: V1Namespace): void {
   delete state.watchedNamespaces[namespaceName];
 }
 
+function getWorkloadMetadataCacheKey(
+  workloadName: string,
+  namespace: string,
+): string {
+  return `${namespace}/${workloadName}`;
+}
+
+export function getCachedWorkloadMetadata(
+  workloadName: string,
+  namespace: string,
+): IKubeObjectMetadataWithoutPodSpec | undefined {
+  const key = getWorkloadMetadataCacheKey(workloadName, namespace);
+  const cachedMetadata = state.workloadMetadata.get(key);
+  return cachedMetadata;
+}
+
+export function setCachedWorkloadMetadata(
+  workloadName: string,
+  namespace: string,
+  metadata: IKubeObjectMetadataWithoutPodSpec,
+): void {
+  const key = getWorkloadMetadataCacheKey(workloadName, namespace);
+  state.workloadMetadata.set(key, metadata);
+}
+
 export const state = {
   shutdownInProgress: false,
-  imagesAlreadyScanned: new LruCache<string, string>(imagesLruCacheOptions),
+  imagesAlreadyScanned: new LruCache<string, Set<string>>(
+    imagesLruCacheOptions,
+  ),
   workloadsAlreadyScanned: new LruCache<string, string>(
     workloadsLruCacheOptions,
   ),
   watchedNamespaces: {} as Record<string, V1Namespace>,
+  workloadMetadata: new LruCache<string, IKubeObjectMetadataWithoutPodSpec>(
+    workloadMetadataLruCacheOptions,
+  ),
 };

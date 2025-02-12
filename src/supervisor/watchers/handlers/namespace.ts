@@ -20,7 +20,11 @@ import {
 } from '../../kuberenetes-api-wrappers';
 import { IRequestError } from '../../types';
 import { trimWorkloads } from '../../workload-sanitization';
-import { RETRYABLE_NETWORK_ERRORS } from '../types';
+import {
+  RETRYABLE_NETWORK_ERROR_CODES,
+  RETRYABLE_NETWORK_ERROR_MESSAGES,
+} from '../types';
+import { restartableErrorHandler } from './error';
 import { PAGE_SIZE } from './pagination';
 
 /**
@@ -58,23 +62,7 @@ export async function trackNamespaces(): Promise<void> {
   informer.on(ADD, storeNamespace);
   informer.on(UPDATE, storeNamespace);
   informer.on(DELETE, deleteNamespace);
-  informer.on(ERROR, (error) => {
-    const code = error.code || '';
-    logContext.code = code;
-    if (RETRYABLE_NETWORK_ERRORS.includes(code)) {
-      logger.debug(logContext, 'informer error occurred, restarting informer');
-
-      // Restart informer after 1sec
-      setTimeout(async () => {
-        await informer.start();
-      }, 1000);
-    } else {
-      logger.error(
-        { ...logContext, error },
-        'unexpected informer error event occurred',
-      );
-    }
-  });
+  informer.on(ERROR, restartableErrorHandler(informer, logContext));
 
   await informer.start();
 }
@@ -97,13 +85,13 @@ export async function trackNamespace(namespace: string): Promise<void> {
   const loggedListMethod = async () => {
     try {
       return await retryKubernetesApiRequest(async () => {
+        logger.info({}, 'retrying k8s api request');
         const reply = await k8sApi.coreClient.readNamespace(namespace);
         const list = new V1NamespaceList();
         list.apiVersion = 'v1';
         list.kind = 'NamespaceList';
         list.items = new Array<V1Namespace>(reply.body);
         list.metadata = new V1ListMeta();
-        list.metadata.resourceVersion = reply.body.metadata?.resourceVersion;
         return {
           response: reply.response,
           body: list,
@@ -124,23 +112,7 @@ export async function trackNamespace(namespace: string): Promise<void> {
   informer.on(ADD, storeNamespace);
   informer.on(UPDATE, storeNamespace);
   informer.on(DELETE, deleteNamespace);
-  informer.on(ERROR, (error) => {
-    const code = error.code || '';
-    logContext.code = code;
-    if (RETRYABLE_NETWORK_ERRORS.includes(code)) {
-      logger.debug(logContext, 'informer error occurred, restarting informer');
-
-      // Restart informer after 1sec
-      setTimeout(async () => {
-        await informer.start();
-      }, 1000);
-    } else {
-      logger.error(
-        { ...logContext, error },
-        'unexpected informer error event occurred',
-      );
-    }
-  });
+  informer.on(ERROR, restartableErrorHandler(informer, logContext));
 
   await informer.start();
 }
@@ -200,13 +172,13 @@ async function listPaginatedNamespaces(list: V1NamespaceList): Promise<{
     } catch (err) {
       const error = err as IRequestError;
 
-      switch (error.code) {
-        case 'ECONNRESET':
-          const seconds = calculateSleepSeconds();
-          await sleep(seconds);
-          continue;
-        default:
-          break;
+      if (
+        RETRYABLE_NETWORK_ERROR_CODES.includes(error.code || '') ||
+        RETRYABLE_NETWORK_ERROR_MESSAGES.includes(error.message || '')
+      ) {
+        const seconds = calculateSleepSeconds();
+        await sleep(seconds);
+        continue;
       }
 
       switch (error.response?.statusCode) {

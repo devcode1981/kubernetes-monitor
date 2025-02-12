@@ -1,7 +1,7 @@
 import { platform } from 'os';
 import { existsSync, chmodSync } from 'fs';
 
-import { IDeployer, IImageOptions } from './types';
+import { IDeployer, IDeployOptions, IImageOptions } from './types';
 import { execWrapper as exec } from '../../helpers/exec';
 
 const helmVersion = '3.0.0';
@@ -14,6 +14,7 @@ export const helmDeployer: IDeployer = {
 
 async function deployKubernetesMonitor(
   imageOptions: IImageOptions,
+  deployOptions: IDeployOptions,
 ): Promise<void> {
   if (!existsSync(helmPath)) {
     await downloadHelm();
@@ -29,7 +30,8 @@ async function deployKubernetesMonitor(
       `--set image.repository=${imageName} ` +
       `--set image.tag=${imageTag} ` +
       `--set image.pullPolicy=${imagePullPolicy} ` +
-      '--set integrationApi=https://kubernetes-upstream.dev.snyk.io ' +
+      '--set integrationApi=https://api.dev.snyk.io/v2/kubernetes-upstream ' +
+      `--set clusterName=${deployOptions.clusterName} ` +
       '--set nodeSelector."kubernetes\\.io/os"=linux ' +
       '--set pvc.enabled=true ' +
       '--set pvc.create=true ' +
@@ -37,6 +39,7 @@ async function deployKubernetesMonitor(
       '--set rbac.serviceAccount.annotations."foo"="bar" ' +
       '--set volumes.projected.serviceAccountToken=true ' +
       '--set securityContext.fsGroup=65534 ' +
+      '--set podSecurityContext.fsGroupChangePolicy="Always" ' +
       '--set skopeo.compression.level=1 ' +
       '--set workers.count=5 ' +
       '--set sysdig.enabled=true ',

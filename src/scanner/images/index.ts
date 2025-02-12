@@ -27,12 +27,14 @@ async function pullImageBySkopeoRepo(
 ): Promise<IPullableImage> {
   // Scan image by digest if exists, other way fallback tag
   const scanId = imageToPull.imageWithDigest ?? imageToPull.imageName;
-  await skopeoCopy(
+  const { manifestDigest, indexDigest } = await skopeoCopy(
     scanId,
     imageToPull.fileSystemPath,
     imageToPull.skopeoRepoType,
     workloadName,
   );
+  imageToPull.manifestDigest = manifestDigest;
+  imageToPull.indexDigest = indexDigest;
   return imageToPull;
 }
 
@@ -50,12 +52,22 @@ export async function pullImages(
       pulledImages.push(pulledImage);
     } catch (error) {
       logger.error(
-        { error, image: image.imageWithDigest ?? image.imageName },
+        {
+          error: sanitizeSkopeoErrorForLogging(error),
+          image: image.imageWithDigest ?? image.imageName,
+        },
         'failed to pull image docker/oci archive image',
       );
     }
   }
   return pulledImages;
+}
+
+function sanitizeSkopeoErrorForLogging(error) {
+  delete error.stack;
+  delete error.message;
+  delete error.childProcess;
+  return error;
 }
 
 export function getImagesWithFileSystemPath(
@@ -116,13 +128,23 @@ export async function scanImages(
 ): Promise<IScanResult[]> {
   const scannedImages: IScanResult[] = [];
 
-  for (const { imageName, fileSystemPath, imageWithDigest } of images) {
+  for (const {
+    imageName,
+    fileSystemPath,
+    imageWithDigest,
+    manifestDigest,
+    indexDigest,
+  } of images) {
     try {
       const archivePath = `docker-archive:${fileSystemPath}`;
 
       const pluginResponse = await scan({
         path: archivePath,
         imageNameAndTag: imageName,
+        digests: {
+          manifest: manifestDigest,
+          index: indexDigest,
+        },
       });
 
       if (

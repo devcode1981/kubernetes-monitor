@@ -14,11 +14,14 @@ const httpsAgent = new HttpsAgent({
 });
 
 function getSysdigUrl(): string {
-  return config.SYSDIG_ENDPOINT + '/v1/runtimeimages';
+  return (
+    'https://' +
+    config.SYSDIG_ENDPOINT_URL +
+    '/api/scanning/eveintegration/v2/runtimeimages'
+  );
 }
-
 function getSysdigAuthHeader(): string {
-  return `Bearer ${config.SYSDIG_TOKEN}`;
+  return `Bearer ${config.SYSDIG_RISK_SPOTLIGHT_TOKEN}`;
 }
 
 function isSuccessStatusCode(statusCode: number | undefined): boolean {
@@ -29,6 +32,8 @@ function isSuccessStatusCode(statusCode: number | undefined): boolean {
 export async function validateConnectivity(): Promise<void> {
   const url = getSysdigUrl();
   const header = getSysdigAuthHeader();
+  const clusterName = config.SYSDIG_CLUSTER_NAME;
+
   const reqOptions: NeedleOptions = {
     agent: httpsAgent,
     headers: {
@@ -36,12 +41,10 @@ export async function validateConnectivity(): Promise<void> {
     },
     timeout: 10_000,
   };
-
   const limit: number = 1;
-  const cursor: string = '';
   const { response } = await retryRequest(
     'get',
-    `${url}?limit=${limit}&cursor=${cursor}`,
+    `${url}?clusterName=${clusterName}&limit=${limit}`,
     {},
     reqOptions,
   );
@@ -53,9 +56,9 @@ export async function validateConnectivity(): Promise<void> {
 export async function scrapeData(): Promise<void> {
   const url = getSysdigUrl();
   const header = getSysdigAuthHeader();
-
-  // limit: min 1, max 500, default 250
+  const clusterName = config.SYSDIG_CLUSTER_NAME;
   const limit: number = 10;
+
   const reqOptions: NeedleOptions = {
     agent: httpsAgent,
     headers: {
@@ -68,14 +71,20 @@ export async function scrapeData(): Promise<void> {
     try {
       logger.info({ cursor }, 'attempting to get runtime images');
 
+      let requestUrl: string = `${url}?clusterName=${clusterName}&limit=${limit}`;
+      if (cursor) {
+        requestUrl = `${requestUrl}&cursor=${cursor}`;
+      }
       const { response, attempt } = await retryRequest(
         'get',
-        `${url}?limit=${limit}&cursor=${cursor}`,
+        requestUrl,
         {},
         reqOptions,
       );
       if (!isSuccessStatusCode(response.statusCode)) {
-        throw new Error(`${response.statusCode} ${response.statusMessage}`);
+        throw new Error(
+          `${response.statusCode} ${response.statusMessage} for ${requestUrl}`,
+        );
       }
 
       logger.info(
@@ -86,12 +95,18 @@ export async function scrapeData(): Promise<void> {
         'runtime images received successfully',
       );
 
-      const responseBody: IRuntimeImagesResponse = response.body;
-      const runtimeDataPayload = constructRuntimeData(responseBody.data);
-      logger.info({}, 'sending runtime data upstream');
-      await sendRuntimeData(runtimeDataPayload);
+      const responseBody: IRuntimeImagesResponse | undefined = response.body;
+      const runtimeDataPayload = constructRuntimeData(
+        responseBody?.data ?? [],
+        2,
+      );
 
-      cursor = responseBody.page.next || '';
+      if (runtimeDataPayload) {
+        logger.info({}, 'sending runtime data upstream');
+        await sendRuntimeData(runtimeDataPayload);
+      }
+
+      cursor = responseBody?.page.next || '';
       if (!cursor) {
         break;
       }

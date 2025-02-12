@@ -4,7 +4,7 @@ import sleep from 'sleep-promise';
 
 import platforms, { getKubernetesVersionForPlatform } from './platforms';
 import deployers from './deployers';
-import { IImageOptions } from './deployers/types';
+import { IDeployOptions, IImageOptions } from './deployers/types';
 import * as kubectl from '../helpers/kubectl';
 import { execWrapper as exec } from '../helpers/exec';
 
@@ -13,9 +13,21 @@ const createCluster = process.env['CREATE_CLUSTER'] === 'true';
 const deploymentType = process.env['DEPLOYMENT_TYPE'] || 'YAML';
 
 function getIntegrationId(): string {
-  const integrationId = randomUUID();
-  console.log(`Generated new integration ID ${integrationId}`);
+  const integrationId = process.env.INTEGRATION_TESTS_INTEGRATION_ID!;
+  console.log(`using integration ID ${integrationId} for integration tests`);
   return integrationId;
+}
+
+function getClusterName(): string {
+  const clusterName = `cluster_${randomUUID()}`;
+  console.log(`Generated new Cluster Name ${clusterName}`);
+  return clusterName;
+}
+
+function getServiceAccountApiToken(): string {
+  const serviceAccountApiToken =
+    process.env.INTEGRATION_TESTS_SERVICE_ACCOUNT_API_TOKEN!;
+  return serviceAccountApiToken;
 }
 
 function getEnvVariableOrDefault(
@@ -78,6 +90,7 @@ async function createEnvironment(): Promise<void> {
 
 async function predeploy(
   integrationId: string,
+  serviceAccountApiToken: string,
   namespace: string,
 ): Promise<void> {
   try {
@@ -93,6 +106,7 @@ async function predeploy(
     await kubectl.createSecret(secretName, namespace, {
       'dockercfg.json': gcrDockercfg,
       integrationId,
+      serviceAccountApiToken,
     });
     await createRegistriesConfigMap(namespace);
     console.log(`Namespace ${namespace} and secret ${secretName} created`);
@@ -149,7 +163,10 @@ async function createRegistriesConfigMap(namespace): Promise<void> {
   );
 }
 
-export async function deployMonitor(): Promise<string> {
+export async function deployMonitor(): Promise<{
+  integrationId: string;
+  clusterName: string;
+}> {
   console.log('Begin deploying the snyk-monitor...');
   const namespace = snykMonitorNamespace();
   try {
@@ -184,7 +201,8 @@ export async function deployMonitor(): Promise<string> {
     await createSecretForDockerHubAccess();
 
     const integrationId = getIntegrationId();
-    await predeploy(integrationId, namespace);
+    const serviceAccountApiToken = getServiceAccountApiToken();
+    await predeploy(integrationId, serviceAccountApiToken, namespace);
 
     // TODO: hack, rewrite this
     const imagePullPolicy =
@@ -195,7 +213,15 @@ export async function deployMonitor(): Promise<string> {
       nameAndTag: remoteImageName,
       pullPolicy: imagePullPolicy,
     };
-    await deployers[deploymentType].deploy(deploymentImageOptions);
+    const clusterName = getClusterName();
+    const deploymentOptions: IDeployOptions = {
+      clusterName: clusterName,
+    };
+
+    await deployers[deploymentType].deploy(
+      deploymentImageOptions,
+      deploymentOptions,
+    );
     for (let attempt = 0; attempt < 180; attempt++) {
       try {
         await exec(
@@ -208,9 +234,9 @@ export async function deployMonitor(): Promise<string> {
     }
 
     console.log(
-      `Deployed the snyk-monitor with integration ID ${integrationId}`,
+      `Deployed the snyk-monitor with integration ID: ${integrationId}, in cluster name: ${clusterName}`,
     );
-    return integrationId;
+    return { integrationId, clusterName };
   } catch (err) {
     console.error(err);
     try {
